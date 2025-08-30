@@ -88,3 +88,25 @@ npm run dev
 
 - バックエンドとフロントエンドを両方起動する必要があります
 - 初回起動時、データベーステーブルは自動で作成されます
+
+## フォルダ構成
+
+study-game-app/
+├── backend/           # Python FastAPI バックエンド
+│   ├── main.py       # メインAPIサーバー
+│   ├── database.py   # SQLiteデータベース設定
+│   ├── schemas.py    # Pydanticスキーマ
+│   ├── game_logic.py # ゲームロジック（レベル計算など）
+│   ├── requirements.txt
+│   └── .env
+├── frontend/         # Next.js フロントエンド  
+│   ├── src/
+│   │   ├── app/page.tsx        # メインページ
+│   │   ├── components/         # Reactコンポーネント
+│   │   │   ├── Character.tsx   # キャラクター表示
+│   │   │   ├── Timer.tsx       # タイマー機能
+│   │   │   └── Stats.tsx       # 統計表示
+│   │   └── lib/api.ts          # APIクライアント
+├── start_backend.sh   # バックエンド起動スクリプト
+├── start_frontend.sh  # フロントエンド起動スクリプト
+└── README.md         # 使用方法説明
