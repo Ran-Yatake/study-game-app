@@ -5,8 +5,12 @@ from datetime import datetime, timedelta
 from typing import List
 from contextlib import asynccontextmanager
 
-from database import get_db, create_tables, Character, StudySession
-from schemas import CharacterCreate, CharacterResponse, StudySessionCreate, StudySessionResponse, TimerStart, TimerStop
+from database import get_db, create_tables, Character, StudySession, Certification
+from schemas import (
+    CharacterCreate, CharacterResponse, StudySessionCreate, StudySessionResponse, 
+    TimerStart, TimerStop, CertificationCreate, CertificationUpdate, CertificationResponse,
+    CharacterWithCertifications
+)
 from game_logic import calculate_experience, calculate_level, get_character_appearance, get_next_level_exp
 
 # アクティブなタイマーセッションを管理
@@ -181,6 +185,153 @@ def get_character_stats(character_id: int, db: Session = Depends(get_db)):
             StudySession.ended_at.isnot(None)
         ).all())
     }
+
+# 資格関連API
+@app.post("/certifications", response_model=CertificationResponse)
+def create_certification(certification: CertificationCreate, db: Session = Depends(get_db)):
+    try:
+        # キャラクターが存在するかチェック
+        character = db.query(Character).filter(Character.id == certification.character_id).first()
+        if not character:
+            raise HTTPException(status_code=404, detail="Character not found")
+        
+        # ITSSレベルの範囲チェック
+        if certification.itss_level < 1 or certification.itss_level > 7:
+            raise HTTPException(status_code=400, detail="ITSS level must be between 1 and 7")
+        
+        # 日付文字列をdatetimeオブジェクトに変換
+        obtained_date_obj = None
+        if certification.obtained_date:
+            try:
+                obtained_date_obj = datetime.fromisoformat(certification.obtained_date.replace('Z', '+00:00'))
+            except ValueError:
+                try:
+                    obtained_date_obj = datetime.strptime(certification.obtained_date, '%Y-%m-%d')
+                except ValueError:
+                    raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD or ISO format")
+        
+        db_certification = Certification(
+            character_id=certification.character_id,
+            name=certification.name,
+            category=certification.category,
+            itss_level=certification.itss_level,
+            obtained_date=obtained_date_obj,
+            description=certification.description
+        )
+        db.add(db_certification)
+        db.commit()
+        db.refresh(db_certification)
+        return db_certification
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error creating certification: {e}")
+        print(f"Certification data: {certification}")
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+@app.get("/certifications/{character_id}", response_model=List[CertificationResponse])
+def get_character_certifications(character_id: int, db: Session = Depends(get_db)):
+    # キャラクターが存在するかチェック
+    character = db.query(Character).filter(Character.id == character_id).first()
+    if not character:
+        raise HTTPException(status_code=404, detail="Character not found")
+    
+    return db.query(Certification).filter(Certification.character_id == character_id).order_by(Certification.created_at.desc()).all()
+
+@app.get("/characters/{character_id}/with-certifications", response_model=CharacterWithCertifications)
+def get_character_with_certifications(character_id: int, db: Session = Depends(get_db)):
+    character = db.query(Character).filter(Character.id == character_id).first()
+    if not character:
+        raise HTTPException(status_code=404, detail="Character not found")
+    return character
+
+@app.put("/certifications/{certification_id}", response_model=CertificationResponse)
+def update_certification(certification_id: int, certification_update: CertificationUpdate, db: Session = Depends(get_db)):
+    try:
+        certification = db.query(Certification).filter(Certification.id == certification_id).first()
+        if not certification:
+            raise HTTPException(status_code=404, detail="Certification not found")
+        
+        # 更新フィールドをチェック
+        update_data = certification_update.dict(exclude_unset=True)
+        
+        # ITSSレベルの範囲チェック
+        if 'itss_level' in update_data:
+            if update_data['itss_level'] < 1 or update_data['itss_level'] > 7:
+                raise HTTPException(status_code=400, detail="ITSS level must be between 1 and 7")
+        
+        # 日付文字列の変換
+        if 'obtained_date' in update_data and update_data['obtained_date']:
+            try:
+                update_data['obtained_date'] = datetime.fromisoformat(update_data['obtained_date'].replace('Z', '+00:00'))
+            except ValueError:
+                try:
+                    update_data['obtained_date'] = datetime.strptime(update_data['obtained_date'], '%Y-%m-%d')
+                except ValueError:
+                    raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD or ISO format")
+        
+        for field, value in update_data.items():
+            setattr(certification, field, value)
+        
+        db.commit()
+        db.refresh(certification)
+        return certification
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error updating certification: {e}")
+        print(f"Certification ID: {certification_id}")
+        print(f"Update data: {certification_update}")
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+@app.delete("/certifications/{certification_id}")
+def delete_certification(certification_id: int, db: Session = Depends(get_db)):
+    certification = db.query(Certification).filter(Certification.id == certification_id).first()
+    if not certification:
+        raise HTTPException(status_code=404, detail="Certification not found")
+    
+    db.delete(certification)
+    db.commit()
+    return {"message": "Certification deleted successfully"}
+
+@app.get("/certifications/{certification_id}/color")
+def get_certification_color(certification_id: int, db: Session = Depends(get_db)):
+    certification = db.query(Certification).filter(Certification.id == certification_id).first()
+    if not certification:
+        raise HTTPException(status_code=404, detail="Certification not found")
+    
+    # ITSSレベルに基づく色分け
+    color_map = {
+        1: "#8B4513",  # ブラウン - 基礎レベル
+        2: "#CD853F",  # ペルー - 応用レベル
+        3: "#32CD32",  # ライムグリーン - 実用レベル
+        4: "#00CED1",  # ダークターコイズ - 専門レベル
+        5: "#4169E1",  # ロイヤルブルー - 上級レベル
+        6: "#9932CC",  # ダークオーキッド - エキスパート
+        7: "#FFD700"   # ゴールド - マスター
+    }
+    
+    return {
+        "certification_id": certification_id,
+        "itss_level": certification.itss_level,
+        "color": color_map.get(certification.itss_level, "#808080"),
+        "level_name": get_itss_level_name(certification.itss_level)
+    }
+
+def get_itss_level_name(level: int) -> str:
+    """ITSSレベルに対応する名称を返す"""
+    level_names = {
+        1: "エントリレベル",
+        2: "基礎レベル",
+        3: "応用レベル",
+        4: "専門レベル",
+        5: "上級レベル",
+        6: "エキスパートレベル",
+        7: "マスターレベル"
+    }
+    return level_names.get(level, "不明")
 
 if __name__ == "__main__":
     import uvicorn
