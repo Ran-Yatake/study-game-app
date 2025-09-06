@@ -11,6 +11,8 @@ class CharacterResponse(BaseModel):
     level: int
     total_study_time: float
     experience: int
+    coins: int
+    current_color: str
     created_at: datetime
     
     class Config:
@@ -75,8 +77,53 @@ class CharacterWithCertifications(BaseModel):
     level: int
     total_study_time: float
     experience: int
+    coins: int
+    current_color: str
     created_at: datetime
     certifications: List[CertificationResponse]
+    
+    class Config:
+        from_attributes = True
+
+# 装備関連スキーマ
+class EquipmentResponse(BaseModel):
+    id: str
+    name: str
+    category: str
+    price: int
+    description: Optional[str]
+    color_code: Optional[str]
+    
+    class Config:
+        from_attributes = True
+
+class CharacterEquipmentResponse(BaseModel):
+    id: int
+    character_id: int
+    equipment_id: str
+    is_equipped: int
+    purchased_at: datetime
+    equipment_item: EquipmentResponse
+    
+    class Config:
+        from_attributes = True
+
+class EquipmentPurchase(BaseModel):
+    character_id: int
+    equipment_id: str
+
+class EquipmentEquip(BaseModel):
+    character_id: int
+    equipment_id: str
+    equip: bool  # True: 装備, False: 装備解除
+
+class CoinTransactionResponse(BaseModel):
+    id: int
+    character_id: int
+    amount: int
+    transaction_type: str
+    source: Optional[str]
+    created_at: datetime
     
     class Config:
         from_attributes = True

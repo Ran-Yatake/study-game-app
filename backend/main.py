@@ -5,13 +5,14 @@ from datetime import datetime, timedelta
 from typing import List
 from contextlib import asynccontextmanager
 
-from database import get_db, create_tables, Character, StudySession, Certification
+from database import get_db, create_tables, Character, StudySession, Certification, Equipment, CharacterEquipment, CoinTransaction
 from schemas import (
     CharacterCreate, CharacterResponse, StudySessionCreate, StudySessionResponse, 
     TimerStart, TimerStop, CertificationCreate, CertificationUpdate, CertificationResponse,
-    CharacterWithCertifications
+    CharacterWithCertifications, EquipmentResponse, CharacterEquipmentResponse,
+    EquipmentPurchase, EquipmentEquip, CoinTransactionResponse
 )
-from game_logic import calculate_experience, calculate_level, get_character_appearance, get_next_level_exp
+from game_logic import calculate_experience, calculate_level, get_character_appearance, get_next_level_exp, calculate_coins, get_available_equipment, calculate_equipment_bonus
 
 # アクティブなタイマーセッションを管理
 active_sessions = {}
@@ -61,14 +62,46 @@ def get_character_appearance_api(character_id: int, db: Session = Depends(get_db
     if not character:
         raise HTTPException(status_code=404, detail="Character not found")
     
-    appearance = get_character_appearance(character.level)
+    # 装備中のアイテムを取得
+    equipped_items = db.query(CharacterEquipment).filter(
+        CharacterEquipment.character_id == character_id,
+        CharacterEquipment.is_equipped == 1
+    ).all()
+    
+    # 基本の外見を取得
+    base_appearance = get_character_appearance(character.level)
+    
+    # 装備による外見の更新
+    equipped_accessories = []
+    current_color = character.current_color
+    
+    for item in equipped_items:
+        equipment = db.query(Equipment).filter(Equipment.id == item.equipment_id).first()
+        if equipment:
+            if equipment.category == "accessory":
+                equipped_accessories.append(equipment.id)
+            elif equipment.category == "color":
+                current_color = equipment.color_code
+    
+    # 装備ボーナス情報を取得
+    equipment_list = [item.equipment_id for item in equipped_items]
+    bonus = calculate_equipment_bonus(equipment_list)
+    
+    appearance = {
+        "color": current_color,
+        "size": base_appearance["size"],
+        "accessories": equipped_accessories,
+        "level_accessories": base_appearance["accessories"]  # レベルによる基本アクセサリー
+    }
+    
     next_level_exp = get_next_level_exp(character.level)
     
     return {
         "character": character,
         "appearance": appearance,
         "next_level_exp": next_level_exp,
-        "exp_to_next_level": next_level_exp - character.experience
+        "exp_to_next_level": next_level_exp - character.experience,
+        "equipment_bonus": bonus
     }
 
 # タイマー関連API
@@ -118,14 +151,41 @@ def stop_timer(timer_data: TimerStop, db: Session = Depends(get_db)):
     session.duration = duration_minutes
     session.ended_at = end_time
     
-    # キャラクターのレベルアップ処理
+    # キャラクターの装備ボーナスを取得
     character = db.query(Character).filter(Character.id == session.character_id).first()
+    equipped_items = db.query(CharacterEquipment).filter(
+        CharacterEquipment.character_id == character.id,
+        CharacterEquipment.is_equipped == 1
+    ).all()
+    
+    equipment_list = [item.equipment_id for item in equipped_items]
+    bonus = calculate_equipment_bonus(equipment_list)
+    
     old_level = character.level
     
+    # 基本経験値とコイン計算
+    base_experience = calculate_experience(duration_minutes)
+    base_coins = calculate_coins(duration_minutes)
+    
+    # ボーナス適用
+    final_experience = int(base_experience * bonus["experience_multiplier"])
+    final_coins = int(base_coins * bonus["coin_multiplier"])
+    
+    # キャラクター更新
     character.total_study_time += duration_minutes
-    additional_exp = calculate_experience(duration_minutes)
-    character.experience += additional_exp
+    character.experience += final_experience
+    character.coins += final_coins
     character.level = calculate_level(character.experience)
+    
+    # コイン取得履歴を記録
+    coin_transaction = CoinTransaction(
+        character_id=character.id,
+        amount=final_coins,
+        transaction_type="earned",
+        source="study",
+        study_session_id=session.id
+    )
+    db.add(coin_transaction)
     
     db.commit()
     
@@ -136,10 +196,13 @@ def stop_timer(timer_data: TimerStop, db: Session = Depends(get_db)):
     
     return {
         "duration_minutes": duration_minutes,
-        "experience_gained": additional_exp,
+        "experience_gained": final_experience,
+        "coins_gained": final_coins,
         "level_up": level_up,
         "new_level": character.level,
-        "total_experience": character.experience
+        "total_experience": character.experience,
+        "total_coins": character.coins,
+        "equipment_bonus": bonus
     }
 
 # 学習セッション関連API
@@ -332,6 +395,168 @@ def get_itss_level_name(level: int) -> str:
         7: "マスターレベル"
     }
     return level_names.get(level, "不明")
+
+# 装備関連API
+@app.get("/equipment", response_model=List[EquipmentResponse])
+def get_all_equipment(db: Session = Depends(get_db)):
+    """すべての装備アイテムを取得"""
+    return db.query(Equipment).all()
+
+@app.get("/equipment/shop/{character_id}")
+def get_equipment_shop(character_id: int, db: Session = Depends(get_db)):
+    """キャラクター用の装備ショップ情報を取得"""
+    character = db.query(Character).filter(Character.id == character_id).first()
+    if not character:
+        raise HTTPException(status_code=404, detail="Character not found")
+    
+    # すべての装備アイテム
+    all_equipment = db.query(Equipment).all()
+    
+    # キャラクターが所持している装備
+    owned_equipment = db.query(CharacterEquipment).filter(
+        CharacterEquipment.character_id == character_id
+    ).all()
+    
+    owned_ids = {item.equipment_id for item in owned_equipment}
+    equipped_ids = {item.equipment_id for item in owned_equipment if item.is_equipped == 1}
+    
+    # 装備情報を整形
+    shop_items = []
+    for equipment in all_equipment:
+        shop_items.append({
+            "id": equipment.id,
+            "name": equipment.name,
+            "category": equipment.category,
+            "price": equipment.price,
+            "description": equipment.description,
+            "color_code": equipment.color_code,
+            "owned": equipment.id in owned_ids,
+            "equipped": equipment.id in equipped_ids
+        })
+    
+    return {
+        "character_coins": character.coins,
+        "equipment": shop_items
+    }
+
+@app.post("/equipment/purchase")
+def purchase_equipment(purchase: EquipmentPurchase, db: Session = Depends(get_db)):
+    """装備を購入"""
+    character = db.query(Character).filter(Character.id == purchase.character_id).first()
+    if not character:
+        raise HTTPException(status_code=404, detail="Character not found")
+    
+    equipment = db.query(Equipment).filter(Equipment.id == purchase.equipment_id).first()
+    if not equipment:
+        raise HTTPException(status_code=404, detail="Equipment not found")
+    
+    # 既に所持しているかチェック
+    existing = db.query(CharacterEquipment).filter(
+        CharacterEquipment.character_id == purchase.character_id,
+        CharacterEquipment.equipment_id == purchase.equipment_id
+    ).first()
+    
+    if existing:
+        raise HTTPException(status_code=400, detail="Already owned this equipment")
+    
+    # コイン不足チェック
+    if character.coins < equipment.price:
+        raise HTTPException(status_code=400, detail="Insufficient coins")
+    
+    # コイン消費
+    character.coins -= equipment.price
+    
+    # 装備を追加
+    character_equipment = CharacterEquipment(
+        character_id=purchase.character_id,
+        equipment_id=purchase.equipment_id,
+        is_equipped=0
+    )
+    db.add(character_equipment)
+    
+    # コイン消費履歴を記録
+    coin_transaction = CoinTransaction(
+        character_id=character.id,
+        amount=-equipment.price,
+        transaction_type="spent",
+        source="equipment_purchase",
+        equipment_id=equipment.id
+    )
+    db.add(coin_transaction)
+    
+    db.commit()
+    
+    return {
+        "message": f"{equipment.name}を購入しました",
+        "remaining_coins": character.coins
+    }
+
+@app.post("/equipment/equip")
+def equip_unequip_item(equip_data: EquipmentEquip, db: Session = Depends(get_db)):
+    """装備の着脱"""
+    character = db.query(Character).filter(Character.id == equip_data.character_id).first()
+    if not character:
+        raise HTTPException(status_code=404, detail="Character not found")
+    
+    character_equipment = db.query(CharacterEquipment).filter(
+        CharacterEquipment.character_id == equip_data.character_id,
+        CharacterEquipment.equipment_id == equip_data.equipment_id
+    ).first()
+    
+    if not character_equipment:
+        raise HTTPException(status_code=404, detail="Equipment not owned")
+    
+    equipment = db.query(Equipment).filter(Equipment.id == equip_data.equipment_id).first()
+    
+    if equip_data.equip:
+        # 装備する
+        # カラー装備の場合は、他のカラーを外す
+        if equipment.category == "color":
+            db.query(CharacterEquipment).filter(
+                CharacterEquipment.character_id == equip_data.character_id,
+                CharacterEquipment.equipment_item.has(category="color")
+            ).update({"is_equipped": 0})
+            
+            # キャラクターの現在の色を更新
+            character.current_color = equipment.color_code
+        
+        character_equipment.is_equipped = 1
+        message = f"{equipment.name}を装備しました"
+    else:
+        # 装備を外す
+        character_equipment.is_equipped = 0
+        
+        # カラー装備の場合は、デフォルト色に戻す
+        if equipment.category == "color":
+            character.current_color = "#8B4513"  # デフォルト色
+        
+        message = f"{equipment.name}の装備を外しました"
+    
+    db.commit()
+    
+    return {"message": message}
+
+@app.get("/equipment/{character_id}", response_model=List[CharacterEquipmentResponse])
+def get_character_equipment(character_id: int, db: Session = Depends(get_db)):
+    """キャラクターの所持装備を取得"""
+    character = db.query(Character).filter(Character.id == character_id).first()
+    if not character:
+        raise HTTPException(status_code=404, detail="Character not found")
+    
+    return db.query(CharacterEquipment).filter(
+        CharacterEquipment.character_id == character_id
+    ).all()
+
+@app.get("/coins/{character_id}/transactions", response_model=List[CoinTransactionResponse])
+def get_coin_transactions(character_id: int, db: Session = Depends(get_db)):
+    """キャラクターのコイン取引履歴を取得"""
+    character = db.query(Character).filter(Character.id == character_id).first()
+    if not character:
+        raise HTTPException(status_code=404, detail="Character not found")
+    
+    return db.query(CoinTransaction).filter(
+        CoinTransaction.character_id == character_id
+    ).order_by(CoinTransaction.created_at.desc()).all()
 
 if __name__ == "__main__":
     import uvicorn

@@ -51,10 +51,52 @@ class Character(Base):
     level = Column(Integer, default=1)
     total_study_time = Column(Float, default=0.0)  # 総学習時間（分）
     experience = Column(Integer, default=0)
+    coins = Column(Integer, default=0)  # 所持コイン
+    current_color = Column(String(20), default="#8B4513")  # 現在の色
     created_at = Column(DateTime, default=datetime.utcnow)
     
     # リレーション
     certifications = relationship("Certification", back_populates="character")
+    equipment = relationship("CharacterEquipment", back_populates="character")
+
+# 装備アイテムマスター
+class Equipment(Base):
+    __tablename__ = "equipment"
+    
+    id = Column(String(50), primary_key=True)  # "hat", "glasses"等
+    name = Column(String(100), nullable=False)
+    category = Column(String(50), nullable=False)  # "accessory", "color"
+    price = Column(Integer, nullable=False)
+    description = Column(Text)
+    color_code = Column(String(10))  # 色装備の場合のカラーコード
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+# キャラクターの装備情報
+class CharacterEquipment(Base):
+    __tablename__ = "character_equipment"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    character_id = Column(Integer, ForeignKey("characters.id"), nullable=False)
+    equipment_id = Column(String(50), ForeignKey("equipment.id"), nullable=False)
+    is_equipped = Column(Integer, default=0)  # 0: 未装備, 1: 装備中
+    purchased_at = Column(DateTime, default=datetime.utcnow)
+    
+    # リレーション
+    character = relationship("Character", back_populates="equipment")
+    equipment_item = relationship("Equipment")
+
+# コイン取得履歴
+class CoinTransaction(Base):
+    __tablename__ = "coin_transactions"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    character_id = Column(Integer, ForeignKey("characters.id"), nullable=False)
+    amount = Column(Integer, nullable=False)  # 取得/消費したコイン数
+    transaction_type = Column(String(20), nullable=False)  # "earned", "spent"
+    source = Column(String(50))  # "study", "equipment_purchase"等
+    study_session_id = Column(Integer, ForeignKey("study_sessions.id"))
+    equipment_id = Column(String(50), ForeignKey("equipment.id"))
+    created_at = Column(DateTime, default=datetime.utcnow)
 
 def get_db():
     db = SessionLocal()
