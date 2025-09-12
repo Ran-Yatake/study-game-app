@@ -5,12 +5,13 @@ from datetime import datetime, timedelta
 from typing import List
 from contextlib import asynccontextmanager
 
-from database import get_db, create_tables, Character, StudySession, Certification, Equipment, CharacterEquipment, CoinTransaction
+from database import get_db, create_tables, Character, StudySession, Certification, Equipment, CharacterEquipment, CoinTransaction, ExamSchedule
 from schemas import (
     CharacterCreate, CharacterResponse, StudySessionCreate, StudySessionResponse, 
     TimerStart, TimerStop, CertificationCreate, CertificationUpdate, CertificationResponse,
     CharacterWithCertifications, EquipmentResponse, CharacterEquipmentResponse,
-    EquipmentPurchase, EquipmentEquip, CoinTransactionResponse
+    EquipmentPurchase, EquipmentEquip, CoinTransactionResponse,
+    ExamScheduleCreate, ExamScheduleUpdate, ExamScheduleResponse
 )
 from game_logic import calculate_experience, calculate_level, get_character_appearance, get_next_level_exp, calculate_coins, get_available_equipment, calculate_equipment_bonus
 
@@ -557,6 +558,163 @@ def get_coin_transactions(character_id: int, db: Session = Depends(get_db)):
     return db.query(CoinTransaction).filter(
         CoinTransaction.character_id == character_id
     ).order_by(CoinTransaction.created_at.desc()).all()
+
+# 試験予定関連API
+@app.post("/exam-schedules", response_model=ExamScheduleResponse)
+def create_exam_schedule(exam_schedule: ExamScheduleCreate, db: Session = Depends(get_db)):
+    """試験予定を作成"""
+    try:
+        # キャラクターが存在するかチェック
+        character = db.query(Character).filter(Character.id == exam_schedule.character_id).first()
+        if not character:
+            raise HTTPException(status_code=404, detail="Character not found")
+        
+        # 日付文字列をdatetimeオブジェクトに変換
+        try:
+            exam_date_obj = datetime.fromisoformat(exam_schedule.exam_date.replace('Z', '+00:00'))
+        except ValueError:
+            try:
+                exam_date_obj = datetime.strptime(exam_schedule.exam_date, '%Y-%m-%d')
+            except ValueError:
+                raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD or ISO format")
+        
+        db_exam_schedule = ExamSchedule(
+            character_id=exam_schedule.character_id,
+            exam_name=exam_schedule.exam_name,
+            exam_date=exam_date_obj,
+            category=exam_schedule.category,
+            description=exam_schedule.description,
+            reminder_days=exam_schedule.reminder_days
+        )
+        
+        db.add(db_exam_schedule)
+        db.commit()
+        db.refresh(db_exam_schedule)
+        return db_exam_schedule
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error creating exam schedule: {e}")
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+@app.get("/exam-schedules/{character_id}", response_model=List[ExamScheduleResponse])
+def get_character_exam_schedules(character_id: int, db: Session = Depends(get_db)):
+    """キャラクターの試験予定一覧を取得"""
+    character = db.query(Character).filter(Character.id == character_id).first()
+    if not character:
+        raise HTTPException(status_code=404, detail="Character not found")
+    
+    return db.query(ExamSchedule).filter(
+        ExamSchedule.character_id == character_id
+    ).order_by(ExamSchedule.exam_date.asc()).all()
+
+@app.get("/exam-schedules/calendar/{character_id}")
+def get_exam_calendar(character_id: int, year: int, month: int, db: Session = Depends(get_db)):
+    """指定した年月のカレンダー形式で試験予定を取得"""
+    character = db.query(Character).filter(Character.id == character_id).first()
+    if not character:
+        raise HTTPException(status_code=404, detail="Character not found")
+    
+    # 指定月の開始日と終了日
+    start_date = datetime(year, month, 1)
+    if month == 12:
+        end_date = datetime(year + 1, 1, 1)
+    else:
+        end_date = datetime(year, month + 1, 1)
+    
+    # 該当月の試験予定を取得
+    exams = db.query(ExamSchedule).filter(
+        ExamSchedule.character_id == character_id,
+        ExamSchedule.exam_date >= start_date,
+        ExamSchedule.exam_date < end_date
+    ).order_by(ExamSchedule.exam_date.asc()).all()
+    
+    # 日付ごとにグループ化
+    calendar_data = {}
+    for exam in exams:
+        date_key = exam.exam_date.strftime('%Y-%m-%d')
+        if date_key not in calendar_data:
+            calendar_data[date_key] = []
+        calendar_data[date_key].append({
+            "id": exam.id,
+            "exam_name": exam.exam_name,
+            "category": exam.category,
+            "status": exam.status
+        })
+    
+    return {
+        "year": year,
+        "month": month,
+        "exams": calendar_data
+    }
+
+@app.put("/exam-schedules/{exam_id}", response_model=ExamScheduleResponse)
+def update_exam_schedule(exam_id: int, exam_update: ExamScheduleUpdate, db: Session = Depends(get_db)):
+    """試験予定を更新"""
+    try:
+        exam_schedule = db.query(ExamSchedule).filter(ExamSchedule.id == exam_id).first()
+        if not exam_schedule:
+            raise HTTPException(status_code=404, detail="Exam schedule not found")
+        
+        update_data = exam_update.dict(exclude_unset=True)
+        
+        # 日付文字列の変換
+        if 'exam_date' in update_data and update_data['exam_date']:
+            try:
+                update_data['exam_date'] = datetime.fromisoformat(update_data['exam_date'].replace('Z', '+00:00'))
+            except ValueError:
+                try:
+                    update_data['exam_date'] = datetime.strptime(update_data['exam_date'], '%Y-%m-%d')
+                except ValueError:
+                    raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD or ISO format")
+        
+        # 更新日時を設定
+        update_data['updated_at'] = datetime.utcnow()
+        
+        for field, value in update_data.items():
+            setattr(exam_schedule, field, value)
+        
+        db.commit()
+        db.refresh(exam_schedule)
+        return exam_schedule
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error updating exam schedule: {e}")
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+@app.delete("/exam-schedules/{exam_id}")
+def delete_exam_schedule(exam_id: int, db: Session = Depends(get_db)):
+    """試験予定を削除"""
+    exam_schedule = db.query(ExamSchedule).filter(ExamSchedule.id == exam_id).first()
+    if not exam_schedule:
+        raise HTTPException(status_code=404, detail="Exam schedule not found")
+    
+    db.delete(exam_schedule)
+    db.commit()
+    return {"message": "Exam schedule deleted successfully"}
+
+@app.get("/exam-schedules/upcoming/{character_id}")
+def get_upcoming_exams(character_id: int, days: int = 30, db: Session = Depends(get_db)):
+    """近日中の試験予定を取得（リマインダー用）"""
+    character = db.query(Character).filter(Character.id == character_id).first()
+    if not character:
+        raise HTTPException(status_code=404, detail="Character not found")
+    
+    # 今日から指定日数後までの範囲
+    today = datetime.now().date()
+    end_date = today + timedelta(days=days)
+    
+    upcoming_exams = db.query(ExamSchedule).filter(
+        ExamSchedule.character_id == character_id,
+        ExamSchedule.exam_date >= datetime.combine(today, datetime.min.time()),
+        ExamSchedule.exam_date <= datetime.combine(end_date, datetime.max.time()),
+        ExamSchedule.status == "scheduled"
+    ).order_by(ExamSchedule.exam_date.asc()).all()
+    
+    return upcoming_exams
 
 if __name__ == "__main__":
     import uvicorn

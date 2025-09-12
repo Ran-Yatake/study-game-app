@@ -127,3 +127,35 @@ class CoinTransactionResponse(BaseModel):
     
     class Config:
         from_attributes = True
+
+# 試験予定関連スキーマ
+class ExamScheduleCreate(BaseModel):
+    character_id: int
+    exam_name: str
+    exam_date: str  # ISO形式の文字列として受け取る
+    category: Optional[str] = None
+    description: Optional[str] = None
+    reminder_days: int = 7
+
+class ExamScheduleUpdate(BaseModel):
+    exam_name: Optional[str] = None
+    exam_date: Optional[str] = None
+    category: Optional[str] = None
+    description: Optional[str] = None
+    status: Optional[str] = None
+    reminder_days: Optional[int] = None
+
+class ExamScheduleResponse(BaseModel):
+    id: int
+    character_id: int
+    exam_name: str
+    exam_date: datetime
+    category: Optional[str]
+    description: Optional[str]
+    status: str
+    reminder_days: int
+    created_at: datetime
+    updated_at: datetime
+    
+    class Config:
+        from_attributes = True

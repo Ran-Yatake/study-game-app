@@ -58,6 +58,7 @@ class Character(Base):
     # リレーション
     certifications = relationship("Certification", back_populates="character")
     equipment = relationship("CharacterEquipment", back_populates="character")
+    exam_schedules = relationship("ExamSchedule", back_populates="character")
 
 # 装備アイテムマスター
 class Equipment(Base):
@@ -97,6 +98,24 @@ class CoinTransaction(Base):
     study_session_id = Column(Integer, ForeignKey("study_sessions.id"))
     equipment_id = Column(String(50), ForeignKey("equipment.id"))
     created_at = Column(DateTime, default=datetime.utcnow)
+
+# 試験予定モデル
+class ExamSchedule(Base):
+    __tablename__ = "exam_schedules"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    character_id = Column(Integer, ForeignKey("characters.id"), nullable=False)
+    exam_name = Column(String(200), nullable=False)  # 試験名
+    exam_date = Column(DateTime, nullable=False)  # 試験日
+    category = Column(String(100))  # カテゴリー（IT、語学など）
+    description = Column(Text)  # 詳細・メモ
+    status = Column(String(20), default="scheduled")  # "scheduled", "completed", "cancelled"
+    reminder_days = Column(Integer, default=7)  # 何日前にリマインドするか
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # リレーション
+    character = relationship("Character", back_populates="exam_schedules")
 
 def get_db():
     db = SessionLocal()
