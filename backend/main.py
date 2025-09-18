@@ -15,7 +15,7 @@ from schemas import (
 )
 from game_logic import calculate_experience, calculate_level, get_character_appearance, get_next_level_exp, calculate_coins, get_available_equipment, calculate_equipment_bonus
 
-# アクティブなタイマーセッションを管理
+# アクティブなタイマーセッションを管理しています。
 active_sessions = {}
 
 @asynccontextmanager
