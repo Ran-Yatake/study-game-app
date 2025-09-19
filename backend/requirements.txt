@@ -4,3 +4,5 @@ sqlalchemy==2.0.23
 python-dotenv==1.0.0
 pydantic==2.5.1
 python-multipart==0.0.6
+pymysql==1.1.0
+cryptography==41.0.7

@@ -7,10 +7,23 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# データベース接続設定（SQLiteを使用）
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./study_game.db")
+# データベース接続設定
+DB_HOST = os.getenv("DB_HOST", "localhost")
+DB_PORT = os.getenv("DB_PORT", "3306")
+DB_NAME = os.getenv("DB_NAME", "study_game")
+DB_USER = os.getenv("DB_USER", "root")
+DB_PASSWORD = os.getenv("DB_PASSWORD", "password")
 
-engine = create_engine(DATABASE_URL)
+# MySQLを使用する場合とSQLiteを使用する場合を環境に応じて切り替え
+if DB_HOST == "localhost" and os.path.exists("./study_game.db"):
+    # ローカル開発時はSQLiteを使用
+    DATABASE_URL = "sqlite:///./study_game.db"
+    engine = create_engine(DATABASE_URL)
+else:
+    # Docker環境ではMySQLを使用
+    DATABASE_URL = f"mysql+pymysql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+    engine = create_engine(DATABASE_URL, echo=True)
+
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 Base = declarative_base()

@@ -1,25 +1,49 @@
-version: '3.8'
-
 services:
   mysql:
     image: mysql:8.0
     environment:
       MYSQL_ROOT_PASSWORD: password
       MYSQL_DATABASE: study_game
+      MYSQL_USER: app_user
+      MYSQL_PASSWORD: app_password
     ports:
       - "3306:3306"
     volumes:
       - mysql_data:/var/lib/mysql
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
     command: --default-authentication-plugin=mysql_native_password
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      timeout: 20s
+      retries: 10
 
   backend:
-    build: ./backend
+    image: study-game-app-backend
     ports:
       - "8000:8000"
     volumes:
       - ./backend:/app
     environment:
       - TZ=Asia/Tokyo
+      - DB_HOST=mysql
+      - DB_PORT=3306
+      - DB_NAME=study_game
+      - DB_USER=app_user
+      - DB_PASSWORD=app_password
+    depends_on:
+      mysql:
+        condition: service_healthy
+    restart: unless-stopped
+
+  frontend:
+    image: study-game-app-frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - NEXT_PUBLIC_API_URL=http://localhost:8000
+    depends_on:
+      - backend
     restart: unless-stopped
 
 volumes:
